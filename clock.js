@@ -68,7 +68,12 @@ function draw(){
  const n=Math.floor(seconds),frac=seconds-n,start=ticks[n],end=n===59?ticks[0]+60:ticks[n+1];
  hand(.93*.75,.15*.059*.75,map(mod(start+frac*(end-start),60)));
 }
-function frame(ts){if(ts-last>=TAU30-1){draw();last=ts;}requestAnimationFrame(frame);}
+function frame(){
+ draw();
+}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)lastStep=null;});
-window.addEventListener('resize',resize,{passive:true});resize();requestAnimationFrame(frame);
+window.addEventListener('resize',resize,{passive:true});
+resize();
+frame();
+setInterval(frame, TAU30);
 })();
