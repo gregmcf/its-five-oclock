@@ -69,10 +69,18 @@ function draw(){
  hand(.93*.75,.15*.059*.75,map(mod(start+frac*(end-start),60)));
 }
 function frame(){
- draw();
+ try {
+   draw();
+   const error=document.getElementById('clock-error');
+   if(error) error.hidden=true;
+ } catch(e) {
+   console.error('Clock drawing error:', e);
+   const error=document.getElementById('clock-error');
+   if(error){error.hidden=false;error.textContent='Clock error: '+String(e && (e.stack || e.message) || e);}
+ }
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)lastStep=null;});
-window.addEventListener('resize',resize,{passive:true});
+window.addEventListener('resize',()=>{resize();frame();},{passive:true});
 resize();
 frame();
 setInterval(frame, TAU30);
