@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#bbbbff"><meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="It's 5 o'clock">
+<meta name="description" content="A clock with fixed hands and moving numbers.">
+<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css"><title>It's 5 o'clock</title>
+</head><body><main aria-label="It's 5 o'clock">
+<canvas id="clock" role="img" aria-label="Live clock: the hands stay fixed while the numbers move to show the time."></canvas>
+</main><script src="clock.js"></script><script>
+if ('serviceWorker' in navigator) window.addEventListener('load', function () {
+navigator.serviceWorker.register('./sw.js').catch(function () {});
+});
+</script></body></html>
