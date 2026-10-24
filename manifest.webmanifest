@@ -1,0 +1,17 @@
+{
+  "name": "It's 5 o'clock",
+  "short_name": "5 o'clock",
+  "description": "A clock with fixed hands and moving numbers.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#bbbbff",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
