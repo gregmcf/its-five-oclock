@@ -36,7 +36,9 @@ function targets(t){
 function elastic(t,now){
  const raw=targets(t),base=raw[0];let lifted=raw.map(p=>base+mod(p-base,60));
  if(!positions||lastStep===null||now-lastStep<0||now-lastStep>2){positions=lifted.slice();first=lifted.slice();lastStep=now;return positions;}
- const dt=now-lastStep;lastStep=now,shift=60*Math.round((first[0]-lifted[0])/60);
+ const dt=now-lastStep;
+ lastStep=now;
+ const shift=60*Math.round((first[0]-lifted[0])/60);
  const alpha=-Math.expm1(-dt/1.4);
  for(let i=0;i<60;i++){first[i]+=alpha*(lifted[i]+shift-first[i]);positions[i]+=alpha*(first[i]-positions[i]);}
  return positions;
