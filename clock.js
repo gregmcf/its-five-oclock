@@ -23,13 +23,49 @@ function hermite(t,n){
  function h(u,len,span){return len*(3*u*u-2*u*u*u)+m*span*(u-3*u*u+2*u*u*u);}
  return d<=a?h(d/a,25,a):25+h((d-a)/b,35,b);
 }
+// Shape-preserving cubic interpolation through strictly increasing anchors.
+function monotoneCubic(xs,ys,x){
+ const n=xs.length,ds=new Array(n-1),ms=new Array(n);
+ for(let i=0;i<n-1;i++)ds[i]=(ys[i+1]-ys[i])/(xs[i+1]-xs[i]);
+ ms[0]=ds[0];ms[n-1]=ds[n-2];
+ for(let i=1;i<n-1;i++){
+   const left=xs[i]-xs[i-1],right=xs[i+1]-xs[i];
+   if(ds[i-1]<=0||ds[i]<=0){ms[i]=0;continue;}
+   const a=2*right+left,b=right+2*left;
+   ms[i]=(a+b)/(a/ds[i-1]+b/ds[i]);
+ }
+ let i=0;
+ while(i<n-2&&x>xs[i+1])i++;
+ const span=xs[i+1]-xs[i],u=(x-xs[i])/span,u2=u*u,u3=u2*u;
+ return (2*u3-3*u2+1)*ys[i]+(u3-2*u2+u)*span*ms[i]
+       +(-2*u3+3*u2)*ys[i+1]+(u3-u2)*span*ms[i+1];
+}
+// Make the hour hand divide the space between its neighbouring hour
+// numbers in the same proportion as the actual minutes past the hour.
+// Blend this constraint in only when the minute hand is safely outside
+// that interval: otherwise two fixed hands cannot both be satisfied.
+function hourAwareTick(t,n){
+ const original=hermite(t,n);
+ const minute=mod(t/60,60),hour=mod(t/720,60);
+ const previous=Math.floor(hour/5)*5,next=previous+5;
+ const before=mod(previous-minute,60),atHour=mod(hour-minute,60),after=mod(next-minute,60);
+ if(!(before+1e-7<atHour&&atHour+1e-7<after))return original;
+ const edge=Math.min(mod(minute-previous,60),mod(minute-next,60));
+ const strength=smooth(Math.max(0,Math.min(1,(edge-1)/3)));
+ if(strength<=0)return original;
+ const fraction=(hour-previous)/5,numberSpacing=7;
+ const x=[0,before,atHour,after,60];
+ const y=[0,25-fraction*numberSpacing,25,25+(1-fraction)*numberSpacing,60];
+ const adjusted=monotoneCubic(x,y,mod(n-minute,60));
+ return original+(adjusted-original)*strength;
+}
 function targets(t){
  const crossing=Math.round(t/CROSS)*CROSS,delta=t-crossing;
- if(Math.abs(delta)>=WINDOW)return Array.from({length:60},(_,n)=>hermite(t,n));
+ if(Math.abs(delta)>=WINDOW)return Array.from({length:60},(_,n)=>hourAwareTick(t,n));
  const before=crossing-WINDOW,after=crossing+WINDOW,k=smooth((delta+WINDOW)/(2*WINDOW));
- const p=hermite(before,0),q=hermite(after,0),shift=-60*Math.floor((q-p+30)/60);
+ const p=hourAwareTick(before,0),q=hourAwareTick(after,0),shift=-60*Math.floor((q-p+30)/60);
  return Array.from({length:60},(_,n)=>{
- const a=p+mod(hermite(before,n)-p,60),b=q+shift+mod(hermite(after,n)-q,60);
+ const a=p+mod(hourAwareTick(before,n)-p,60),b=q+shift+mod(hourAwareTick(after,n)-q,60);
  return mod((1-k)*a+k*b,60);
  });
 }
