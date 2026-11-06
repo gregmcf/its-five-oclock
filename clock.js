@@ -16,13 +16,6 @@ function resize(){
  arc1=distances[1500];arc2=distances[3600]-arc1;slope=Math.min(arc1/25,arc2/35);
 }
 function screen(t,x,y){const th=-t*TAU/60,s=Math.sin(th),c=Math.cos(th);return [cx+(c*x-s*y)*hw,cy-(s*x+c*y)*hh];}
-function hermite(t,n){
- const minute=mod(t/60,60),hour=mod(t/720,60),a=mod(hour-minute,60),b=60-a;
- if(a<1e-9||b<1e-9)return mod(n-minute,60);
- const m=.7*Math.min(25/a,35/b),d=mod(n-minute,60);
- function h(u,len,span){return len*(3*u*u-2*u*u*u)+m*span*(u-3*u*u+2*u*u*u);}
- return d<=a?h(d/a,25,a):25+h((d-a)/b,35,b);
-}
 // Shape-preserving cubic interpolation through strictly increasing anchors.
 function monotoneCubic(xs,ys,x){
  const n=xs.length,ds=new Array(n-1),ms=new Array(n);
@@ -40,33 +33,29 @@ function monotoneCubic(xs,ys,x){
  return (2*u3-3*u2+1)*ys[i]+(u3-2*u2+u)*span*ms[i]
        +(-2*u3+3*u2)*ys[i+1]+(u3-u2)*span*ms[i+1];
 }
-// Make the hour hand divide the space between its neighbouring hour
-// numbers in the same proportion as the actual minutes past the hour.
-// Blend this constraint in only when the minute hand is safely outside
-// that interval: otherwise two fixed hands cannot both be satisfied.
-function hourAwareTick(t,n){
- const original=hermite(t,n);
- const minute=mod(t/60,60),hour=mod(t/720,60);
- const previous=Math.floor(hour/5)*5,next=previous+5;
- const before=mod(previous-minute,60),atHour=mod(hour-minute,60),after=mod(next-minute,60);
- if(!(before+1e-7<atHour&&atHour+1e-7<after))return original;
- const edge=Math.min(mod(minute-previous,60),mod(minute-next,60));
- const strength=smooth(Math.max(0,Math.min(1,(edge-1)/3)));
- if(strength<=0)return original;
- const fraction=(hour-previous)/5,numberSpacing=7;
- const x=[0,before,atHour,after,60];
- const y=[0,25-fraction*numberSpacing,25,25+(1-fraction)*numberSpacing,60];
- const adjusted=monotoneCubic(x,y,mod(n-minute,60));
- return original+(adjusted-original)*strength;
+// Give the hour reading permanent priority: this smooth, periodic baseline
+// keeps the current hour between the neighbouring hour numbers, even while
+// the real minute and hour hands pass each other.
+const HOUR_SPACING_AMPLITUDE=1.9;
+function hourBaseline(d){
+ return d+HOUR_SPACING_AMPLITUDE*Math.sin(TAU*d/60);
 }
+// A monotone warp brings the current minute to the fixed 12 position (0).
+// Around a hand crossing, blend back to the hour-accurate baseline instead:
+// two coincident real hands cannot occupy two different fixed display points.
+// The blend is C1-continuous and never reverses the number order.
 function targets(t){
- const crossing=Math.round(t/CROSS)*CROSS,delta=t-crossing;
- if(Math.abs(delta)>=WINDOW)return Array.from({length:60},(_,n)=>hourAwareTick(t,n));
- const before=crossing-WINDOW,after=crossing+WINDOW,k=smooth((delta+WINDOW)/(2*WINDOW));
- const p=hourAwareTick(before,0),q=hourAwareTick(after,0),shift=-60*Math.floor((q-p+30)/60);
+ const minute=mod(t/60,60),hour=mod(t/720,60);
+ const relativeMinute=mod(minute-hour,60);
+ const gap=Math.min(relativeMinute-4,56-relativeMinute);
+ const weight=smooth(Math.max(0,Math.min(1,gap/6)));
+ const xs=[0,4,relativeMinute,56,60];
+ const ys=[0,hourBaseline(4),35,hourBaseline(56),60];
  return Array.from({length:60},(_,n)=>{
- const a=p+mod(hourAwareTick(before,n)-p,60),b=q+shift+mod(hourAwareTick(after,n)-q,60);
- return mod((1-k)*a+k*b,60);
+   const d=mod(n-hour,60);
+   const baseline=hourBaseline(d);
+   const adjusted=weight===0?baseline:monotoneCubic(xs,ys,d);
+   return mod(25+baseline+weight*(adjusted-baseline),60);
  });
 }
 function elastic(t,now){
