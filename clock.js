@@ -3,8 +3,8 @@
 'use strict';
 const canvas=document.getElementById('clock'),ctx=canvas.getContext('2d');
 const TAU=2*Math.PI,mod=(x,m)=>((x%m)+m)%m,smooth=t=>t*t*(3-2*t);
-const CROSS=12*3600/11,WINDOW=120,TAU30=1000/30;
-let w=0,h=0,cx=0,cy=0,hw=0,hh=0,shape='',last=0,positions=null,first=null,lastStep=null;
+const TAU30=1000/30;
+let w=0,h=0,cx=0,cy=0,hw=0,hh=0;
 let distances=new Float64Array(3601),arc1=0,arc2=0,slope=0;
 function resize(){
  const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,3);
@@ -16,58 +16,36 @@ function resize(){
  arc1=distances[1500];arc2=distances[3600]-arc1;slope=Math.min(arc1/25,arc2/35);
 }
 function screen(t,x,y){const th=-t*TAU/60,s=Math.sin(th),c=Math.cos(th);return [cx+(c*x-s*y)*hw,cy-(s*x+c*y)*hh];}
-// Shape-preserving cubic interpolation through strictly increasing anchors.
-function monotoneCubic(xs,ys,x){
- const n=xs.length,ds=new Array(n-1),ms=new Array(n);
- for(let i=0;i<n-1;i++)ds[i]=(ys[i+1]-ys[i])/(xs[i+1]-xs[i]);
- ms[0]=ds[0];ms[n-1]=ds[n-2];
- for(let i=1;i<n-1;i++){
-   const left=xs[i]-xs[i-1],right=xs[i+1]-xs[i];
-   if(ds[i-1]<=0||ds[i]<=0){ms[i]=0;continue;}
-   const a=2*right+left,b=right+2*left;
-   ms[i]=(a+b)/(a/ds[i-1]+b/ds[i]);
+// Calculate positions directly from the time instead of accumulating motion.
+// This avoids unwrapping errors during crossings and when an iPhone resumes.
+const CROSSING_BLEND_START=0.5;
+const CROSSING_BLEND_END=5.0;
+function hermiteArc(x,length,span,slope) {
+ const u=x/span,u2=u*u,u3=u2*u;
+ return length*(3*u2-2*u3)+slope*span*(u-3*u2+2*u3);
+}
+function positionAt(t,n) {
+ const hour=mod(t/720,60),minute=mod(t/60,60);
+ const d=mod(n-hour,60),r=mod(minute-hour,60);
+ // d is the clockwise separation from the actual hour. Its linear
+ // distribution always keeps the neighbouring hour numerals in proportion.
+ const separation=Math.min(r,60-r);
+ const blend=smooth(Math.max(0,Math.min(1,
+   (separation-CROSSING_BLEND_START)/
+   (CROSSING_BLEND_END-CROSSING_BLEND_START))));
+ // Put the minute mark at 35 beyond the fixed hour hand (25):
+ // that is the fixed minute-hand position at 12 (0 mod 60).
+ // Near a crossing, smoothly return to the hour-accurate baseline.
+ let aligned=d;
+ if(r>1e-8&&60-r>1e-8) {
+   const tangent=.65*Math.min(35/r,25/(60-r));
+   aligned=d<=r
+     ?hermiteArc(d,35,r,tangent)
+     :35+hermiteArc(d-r,25,60-r,tangent);
  }
- let i=0;
- while(i<n-2&&x>xs[i+1])i++;
- const span=xs[i+1]-xs[i],u=(x-xs[i])/span,u2=u*u,u3=u2*u;
- return (2*u3-3*u2+1)*ys[i]+(u3-2*u2+u)*span*ms[i]
-       +(-2*u3+3*u2)*ys[i+1]+(u3-u2)*span*ms[i+1];
+ return mod(25+d+blend*(aligned-d),60);
 }
-// Give the hour reading permanent priority: this smooth, periodic baseline
-// keeps the current hour between the neighbouring hour numbers, even while
-// the real minute and hour hands pass each other.
-const HOUR_SPACING_AMPLITUDE=1.9;
-function hourBaseline(d){
- return d+HOUR_SPACING_AMPLITUDE*Math.sin(TAU*d/60);
-}
-// A monotone warp brings the current minute to the fixed 12 position (0).
-// Around a hand crossing, blend back to the hour-accurate baseline instead:
-// two coincident real hands cannot occupy two different fixed display points.
-// The blend is C1-continuous and never reverses the number order.
-function targets(t){
- const minute=mod(t/60,60),hour=mod(t/720,60);
- const relativeMinute=mod(minute-hour,60);
- const gap=Math.min(relativeMinute-4,56-relativeMinute);
- const weight=smooth(Math.max(0,Math.min(1,gap/6)));
- const xs=[0,4,relativeMinute,56,60];
- const ys=[0,hourBaseline(4),35,hourBaseline(56),60];
- return Array.from({length:60},(_,n)=>{
-   const d=mod(n-hour,60);
-   const baseline=hourBaseline(d);
-   const adjusted=weight===0?baseline:monotoneCubic(xs,ys,d);
-   return mod(25+baseline+weight*(adjusted-baseline),60);
- });
-}
-function elastic(t,now){
- const raw=targets(t),base=raw[0];let lifted=raw.map(p=>base+mod(p-base,60));
- if(!positions||lastStep===null||now-lastStep<0||now-lastStep>2){positions=lifted.slice();first=lifted.slice();lastStep=now;return positions;}
- const dt=now-lastStep;
- lastStep=now;
- const shift=60*Math.round((first[0]-lifted[0])/60);
- const alpha=-Math.expm1(-dt/1.4);
- for(let i=0;i<60;i++){first[i]+=alpha*(lifted[i]+shift-first[i]);positions[i]+=alpha*(first[i]-positions[i]);}
- return positions;
-}
+function targets(t){return Array.from({length:60},(_,n)=>positionAt(t,n));}
 function map(pos){
  pos=mod(pos,60);if(pos===0||pos===25)return pos;
  const short=pos<25,start=short?0:25,span=short?25:35,arc=short?arc1:arc2,offset=short?0:arc1,u=(pos-start)/span;
@@ -82,7 +60,7 @@ function hand(length,width,rotate){let pts=[[0,length],[width,.8*length],[width,
 }
 function draw(){
  resize();const now=new Date(),seconds=now.getSeconds()+now.getMilliseconds()/1000,t=(now.getHours()%12)*3600+now.getMinutes()*60+seconds;
- const ticks=elastic(t,performance.now()/1000),scale=Math.min(hw,hh),border=Math.max(1,.015*scale),dot=Math.max(1,.7*border);
+ const ticks=targets(t),scale=Math.min(hw,hh),border=Math.max(1,.015*scale),dot=Math.max(1,.7*border);
  ctx.clearRect(0,0,w,h);ellipse(cx,cy,.75*hw,.75*hh,'#bbbbff',border);
  hand(.91*.75,.5*.059*.75,0);hand(.76*.75,.059*.75,25);
  ellipse(cx,cy,.3*.059*.75*hw,.3*.059*.75*hh,'#bbbbbb');
@@ -92,8 +70,7 @@ function draw(){
  if(n%5===0){const label=screen(angle,0,1.15*.75);ctx.fillStyle='#000';ctx.fillText(String(n===0?12:n/5),...label);
  const end=screen(angle,0,1.03*.75);ellipse(end[0],end[1],dot,dot,'#000');}
  });
- const n=Math.floor(seconds),frac=seconds-n,start=ticks[n],end=n===59?ticks[0]+60:ticks[n+1];
- hand(.93*.75,.15*.059*.75,map(mod(start+frac*(end-start),60)));
+ hand(.93*.75,.15*.059*.75,map(positionAt(t,mod(t/60,60))));
 }
 function frame(){
  try {
@@ -106,7 +83,7 @@ function frame(){
    if(error){error.hidden=false;error.textContent='Clock error: '+String(e && (e.stack || e.message) || e);}
  }
 }
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)lastStep=null;});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)frame();});
 window.addEventListener('resize',()=>{resize();frame();},{passive:true});
 resize();
 frame();
