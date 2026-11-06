@@ -16,36 +16,29 @@ function resize(){
  arc1=distances[1500];arc2=distances[3600]-arc1;slope=Math.min(arc1/25,arc2/35);
 }
 function screen(t,x,y){const th=-t*TAU/60,s=Math.sin(th),c=Math.cos(th);return [cx+(c*x-s*y)*hw,cy-(s*x+c*y)*hh];}
-// Calculate positions directly from the time instead of accumulating motion.
-// This avoids unwrapping errors during crossings and when an iPhone resumes.
-const CROSSING_BLEND_START=0.5;
-const CROSSING_BLEND_END=5.0;
-function hermiteArc(x,length,span,slope) {
- const u=x/span,u2=u*u,u3=u2*u;
- return length*(3*u2-2*u3)+slope*span*(u-3*u2+2*u3);
+// Original clock geometry: the minute mark stays at the fixed 12 hand
+// (position 0), the fractional hour stays at the fixed 5 hand (25).
+// Interpolate linearly between those two constraints, as in gettick().
+// This guarantees both readings and preserves the circular order of marks.
+// The second hand moves, looking up its fractional-second mark in this map.
+const SINGULARITY_HALF_WINDOW=0.5; // blank for one second in total
+function handSeparation(t){
+ const hour=mod(t/720,60);
+ const minute=mod(t/60,60);
+ return Math.min(mod(hour-minute,60),mod(minute-hour,60));
 }
-function positionAt(t,n) {
+function positionAt(t,n){
  const hour=mod(t/720,60),minute=mod(t/60,60);
- const d=mod(n-hour,60),r=mod(minute-hour,60);
- // d is the clockwise separation from the actual hour. Its linear
- // distribution always keeps the neighbouring hour numerals in proportion.
- const separation=Math.min(r,60-r);
- const blend=smooth(Math.max(0,Math.min(1,
-   (separation-CROSSING_BLEND_START)/
-   (CROSSING_BLEND_END-CROSSING_BLEND_START))));
- // Put the minute mark at 35 beyond the fixed hour hand (25):
- // that is the fixed minute-hand position at 12 (0 mod 60).
- // Near a crossing, smoothly return to the hour-accurate baseline.
- let aligned=d;
- if(r>1e-8&&60-r>1e-8) {
-   const tangent=.65*Math.min(35/r,25/(60-r));
-   aligned=d<=r
-     ?hermiteArc(d,35,r,tangent)
-     :35+hermiteArc(d-r,25,60-r,tangent);
- }
- return mod(25+d+blend*(aligned-d),60);
+ const shortSpan=mod(hour-minute,60);
+ // At exact coincidence the mapping is mathematically undefined.
+ if(shortSpan<1e-10||60-shortSpan<1e-10)return null;
+ const distance=mod(n-minute,60);
+ if(distance<=shortSpan)return 25*distance/shortSpan;
+ return 25+35*(distance-shortSpan)/(60-shortSpan);
 }
-function targets(t){return Array.from({length:60},(_,n)=>positionAt(t,n));}
+function targets(t){
+ return Array.from({length:60},(_,n)=>positionAt(t,n));
+}
 function map(pos){
  pos=mod(pos,60);if(pos===0||pos===25)return pos;
  const short=pos<25,start=short?0:25,span=short?25:35,arc=short?arc1:arc2,offset=short?0:arc1,u=(pos-start)/span;
@@ -60,6 +53,11 @@ function hand(length,width,rotate){let pts=[[0,length],[width,.8*length],[width,
 }
 function draw(){
  resize();const now=new Date(),seconds=now.getSeconds()+now.getMilliseconds()/1000,t=(now.getHours()%12)*3600+now.getMinutes()*60+seconds;
+ // The hour and minute hands coincide eleven times every twelve hours.
+ // Briefly blank the dial at each singularity instead of displaying a
+ // misleading or undefined set of numbers. Fast motion either side is OK.
+ const separationSeconds=handSeparation(t)*720/11;
+ if(separationSeconds<=SINGULARITY_HALF_WINDOW){ctx.clearRect(0,0,w,h);return;}
  const ticks=targets(t),scale=Math.min(hw,hh),border=Math.max(1,.015*scale),dot=Math.max(1,.7*border);
  ctx.clearRect(0,0,w,h);ellipse(cx,cy,.75*hw,.75*hh,'#bbbbff',border);
  hand(.91*.75,.5*.059*.75,0);hand(.76*.75,.059*.75,25);
