@@ -18,8 +18,11 @@ function resize(){
 function screen(t,x,y){const th=-t*TAU/60,s=Math.sin(th),c=Math.cos(th);return [cx+(c*x-s*y)*hw,cy-(s*x+c*y)*hh];}
 // Original clock geometry: the minute mark stays at the fixed 12 hand
 // (position 0), the fractional hour stays at the fixed 5 hand (25).
-// Interpolate linearly between those two constraints, as in gettick().
-// This guarantees both readings and preserves the circular order of marks.
+// Use a monotone cubic Hermite spline on each arc between the hands.
+// Each arc has a different average spacing (25/a and 35/b), according
+// to how many tick marks fall on that side. The harmonic mean of these
+// gradients is used at BOTH fixed hands, so adjacent spacing joins
+// continuously without sacrificing exact hour and minute alignment.
 // The second hand moves, looking up its fractional-second mark in this map.
 const SINGULARITY_HALF_WINDOW=0.5; // blank for one second in total
 function handSeparation(t){
@@ -33,8 +36,18 @@ function positionAt(t,n){
  // At exact coincidence the mapping is mathematically undefined.
  if(shortSpan<1e-10||60-shortSpan<1e-10)return null;
  const distance=mod(n-minute,60);
- if(distance<=shortSpan)return 25*distance/shortSpan;
- return 25+35*(distance-shortSpan)/(60-shortSpan);
+ const longSpan=60-shortSpan;
+ const shortAverage=25/shortSpan;
+ const longAverage=35/longSpan;
+ // The harmonic mean is positive and below twice the smaller average,
+ // keeping both cubic segments strictly increasing, even near crossings.
+ const joinSlope=2*shortAverage*longAverage/(shortAverage+longAverage);
+ function interpolate(x,span,length){
+   const u=x/span,u2=u*u,u3=u2*u;
+   return length*(3*u2-2*u3)+joinSlope*span*(u-3*u2+2*u3);
+ }
+ if(distance<=shortSpan)return interpolate(distance,shortSpan,25);
+ return 25+interpolate(distance-shortSpan,longSpan,35);
 }
 function targets(t){
  return Array.from({length:60},(_,n)=>positionAt(t,n));
