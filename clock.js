@@ -5,7 +5,7 @@ const canvas=document.getElementById('clock'),ctx=canvas.getContext('2d');
 const TAU=2*Math.PI,mod=(x,m)=>((x%m)+m)%m,smooth=t=>t*t*(3-2*t);
 const TAU30=1000/30;
 let w=0,h=0,cx=0,cy=0,hw=0,hh=0;
-let distances=new Float64Array(3601),arc1=0,arc2=0,slope=0;
+let distances=new Float64Array(3601),arc1=0,arc2=0;
 function resize(){
  const r=canvas.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,3);
  if(w===r.width&&h===r.height&&canvas.width===Math.round(w*dpr))return;
@@ -13,52 +13,73 @@ function resize(){
  canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);ctx.setTransform(canvas.width/w,0,0,canvas.height/h,0,0);
  let prev=0;distances[0]=0;
  for(let i=0;i<=3600;i++){let th=TAU*i/3600,velocity=Math.hypot(hw*Math.cos(th),hh*Math.sin(th));if(i)distances[i]=distances[i-1]+(velocity+prev)*Math.PI/3600;prev=velocity;}
- arc1=distances[1500];arc2=distances[3600]-arc1;slope=Math.min(arc1/25,arc2/35);
+ arc1=distances[1500];arc2=distances[3600]-arc1;
 }
 function screen(t,x,y){const th=-t*TAU/60,s=Math.sin(th),c=Math.cos(th);return [cx+(c*x-s*y)*hw,cy-(s*x+c*y)*hh];}
-// Original clock geometry: the minute mark stays at the fixed 12 hand
-// (position 0), the fractional hour stays at the fixed 5 hand (25).
-// Use a monotone cubic Hermite spline on each arc between the hands.
-// Each arc has a different average spacing (25/a and 35/b), according
-// to how many tick marks fall on that side. The harmonic mean of these
-// gradients is used at BOTH fixed hands, so adjacent spacing joins
-// continuously without sacrificing exact hour and minute alignment.
-// The second hand moves, looking up its fractional-second mark in this map.
-const SINGULARITY_HALF_WINDOW=0.5; // blank for one second in total
+// Positions are calculated in physical arc length along the ellipse.
+// The two fixed hands divide its perimeter into arcs of lengths arc1 and
+// arc2. Their different average mark spacing is respected exactly.
+//
+// Within the family of monotone C1 cubic Hermite splines, choose the common
+// slope at BOTH hands to minimise the sum of squared differences between
+// successive gaps (for all 60 tick marks). This reduces visible bunching,
+// while preserving the exact fractional hour, minute and second readings.
+const SINGULARITY_HALF_WINDOW=0.5; // blank for one second at coincidence
 function handSeparation(t){
- const hour=mod(t/720,60);
- const minute=mod(t/60,60);
+ const hour=mod(t/720,60),minute=mod(t/60,60);
  return Math.min(mod(hour-minute,60),mod(minute-hour,60));
 }
-function positionAt(t,n){
+function physicalPosition(t,n,joinSlope){
  const hour=mod(t/720,60),minute=mod(t/60,60);
- const shortSpan=mod(hour-minute,60);
- // At exact coincidence the mapping is mathematically undefined.
- if(shortSpan<1e-10||60-shortSpan<1e-10)return null;
- const distance=mod(n-minute,60);
- const longSpan=60-shortSpan;
- const shortAverage=25/shortSpan;
- const longAverage=35/longSpan;
- // The harmonic mean is positive and below twice the smaller average,
- // keeping both cubic segments strictly increasing, even near crossings.
- const joinSlope=2*shortAverage*longAverage/(shortAverage+longAverage);
- function interpolate(x,span,length){
-   const u=x/span,u2=u*u,u3=u2*u;
-   return length*(3*u2-2*u3)+joinSlope*span*(u-3*u2+2*u3);
+ const a=mod(hour-minute,60),b=60-a;
+ if(a<1e-10||b<1e-10)return null;
+ const d=mod(n-minute,60);
+ const short=d<=a, span=short?a:b,length=short?arc1:arc2;
+ const x=short?d:d-a,u=x/span,u2=u*u,u3=u2*u;
+ return (short?0:arc1)+length*(3*u2-2*u3)
+      +joinSlope*span*(u-3*u2+2*u3);
+}
+function tickGaps(t,joinSlope){
+ const circumference=arc1+arc2;
+ const positions=Array.from({length:60},
+   (_,n)=>physicalPosition(t,n,joinSlope));
+ return positions.map((p,n)=>mod(positions[(n+1)%60]-p,circumference));
+}
+function optimalSlope(t){
+ const span1=mod(t/720-t/60,60),span2=60-span1;
+ const average1=arc1/span1,average2=arc2/span2;
+ // Every cubic stays increasing if the common slope is between
+ // zero and three times the smaller average gradient.
+ const maximum=2.999*Math.min(average1,average2);
+ const step=Math.min(1,maximum*0.2);
+ const base=tickGaps(t,0),sample=tickGaps(t,step);
+ let numerator=0,denominator=0;
+ for(let n=0;n<60;n++){
+   const next=(n+1)%60;
+   const baseDifference=base[next]-base[n];
+   const slopeDifference=((sample[next]-base[next])
+                         -(sample[n]-base[n]))/step;
+   numerator+=baseDifference*slopeDifference;
+   denominator+=slopeDifference*slopeDifference;
  }
- if(distance<=shortSpan)return interpolate(distance,shortSpan,25);
- return 25+interpolate(distance-shortSpan,longSpan,35);
+ const best=denominator>1e-16?-numerator/denominator:0;
+ return Math.max(0,Math.min(maximum,best));
 }
-function targets(t){
- return Array.from({length:60},(_,n)=>positionAt(t,n));
-}
-function map(pos){
- pos=mod(pos,60);if(pos===0||pos===25)return pos;
- const short=pos<25,start=short?0:25,span=short?25:35,arc=short?arc1:arc2,offset=short?0:arc1,u=(pos-start)/span;
- const target=offset+arc*(3*u*u-2*u*u*u)+slope*span*(u-3*u*u+2*u*u*u);
- let lo=0,hi=3600;while(lo<hi){const mid=(lo+hi)>>1;if(distances[mid]<target)lo=mid+1;else hi=mid;}
- if(lo<=0)return 0;if(lo>=3601)return 60;
- return ((lo-1)+(target-distances[lo-1])/(distances[lo]-distances[lo-1]))/60;
+// Invert the ellipse's cumulative arc length to get the drawing angle.
+// The hand positions stay 0 (minute) and 25 (hour), regardless of shape.
+function map(length){
+ const circumference=arc1+arc2;
+ length=mod(length,circumference);
+ if(length===0)return 0;
+ if(Math.abs(length-arc1)<1e-9)return 25;
+ let lo=0,hi=3600;
+ while(lo<hi){
+   const mid=(lo+hi)>>1;
+   if(distances[mid]<length)lo=mid+1;else hi=mid;
+ }
+ if(lo<=0)return 0;
+ return ((lo-1)+(length-distances[lo-1])/
+               (distances[lo]-distances[lo-1]))/60;
 }
 function ellipse(x,y,rx,ry,fill,line=0){ctx.beginPath();ctx.ellipse(x,y,Math.max(.01,rx),Math.max(.01,ry),0,0,TAU);ctx.fillStyle=fill;ctx.fill();if(line){ctx.strokeStyle='#111';ctx.lineWidth=line;ctx.stroke();}}
 function hand(length,width,rotate){let pts=[[0,length],[width,.8*length],[width,-.2*length],[-width,-.2*length],[-width,.8*length]];
@@ -71,7 +92,8 @@ function draw(){
  // misleading or undefined set of numbers. Fast motion either side is OK.
  const separationSeconds=handSeparation(t)*720/11;
  if(separationSeconds<=SINGULARITY_HALF_WINDOW){ctx.clearRect(0,0,w,h);return;}
- const ticks=targets(t),scale=Math.min(hw,hh),border=Math.max(1,.015*scale),dot=Math.max(1,.7*border);
+ const joinSlope=optimalSlope(t);
+ const ticks=Array.from({length:60},(_,n)=>physicalPosition(t,n,joinSlope)),scale=Math.min(hw,hh),border=Math.max(1,.015*scale),dot=Math.max(1,.7*border);
  ctx.clearRect(0,0,w,h);ellipse(cx,cy,.75*hw,.75*hh,'#bbbbff',border);
  hand(.91*.75,.5*.059*.75,0);hand(.76*.75,.059*.75,25);
  ellipse(cx,cy,.3*.059*.75*hw,.3*.059*.75*hh,'#bbbbbb');
@@ -81,7 +103,7 @@ function draw(){
  if(n%5===0){const label=screen(angle,0,1.15*.75);ctx.fillStyle='#000';ctx.fillText(String(n===0?12:n/5),...label);
  const end=screen(angle,0,1.03*.75);ellipse(end[0],end[1],dot,dot,'#000');}
  });
- hand(.93*.75,.15*.059*.75,map(positionAt(t,mod(t/60,60))));
+ hand(.93*.75,.15*.059*.75,map(physicalPosition(t,mod(t/60,60),joinSlope)));
 }
 function frame(){
  try {
